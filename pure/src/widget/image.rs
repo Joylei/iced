@@ -57,7 +57,7 @@ where
 impl<'a, Message, Renderer, Handle> Into<Element<'a, Message, Renderer>>
     for Image<Handle>
 where
-    Message: Clone + 'a,
+    Message: 'a,
     Renderer: iced_native::image::Renderer<Handle = Handle> + 'a,
     Handle: Clone + Hash + 'a,
 {
