@@ -19,6 +19,7 @@ use iced_futures::futures;
 use iced_futures::futures::channel::mpsc;
 use iced_graphics::compositor;
 use iced_graphics::window;
+use iced_native::ime::ImeRequest;
 use iced_native::program::Program;
 use iced_native::time::Instant;
 use iced_native::user_interface::{self, UserInterface};
@@ -365,6 +366,8 @@ async fn run_instance<A, E, C>(
                     &mut messages,
                 );
 
+                //user_interface.apply_ime(&window, do_apply_ime);
+
                 debug.event_processing_finished();
 
                 for event in events.drain(..).zip(statuses.into_iter()) {
@@ -447,7 +450,7 @@ async fn run_instance<A, E, C>(
 
                     mouse_interaction = new_mouse_interaction;
                 }
-
+                user_interface.apply_ime(&window, do_apply_ime);
                 window.request_redraw();
                 runtime
                     .broadcast((redraw_event, crate::event::Status::Ignored));
@@ -465,7 +468,6 @@ async fn run_instance<A, E, C>(
                     },
                     _ => ControlFlow::Wait,
                 });
-
                 redraw_pending = false;
             }
             event::Event::UserEvent(message) => {
@@ -531,22 +533,23 @@ async fn run_instance<A, E, C>(
                 ) {
                     Ok(()) => {
                         debug.render_finished();
-
                         // TODO: Handle animations!
                         // Maybe we can use `ControlFlow::WaitUntil` for this.
                     }
-                    Err(error) => match error {
-                        // This is an unrecoverable error.
-                        compositor::SurfaceError::OutOfMemory => {
-                            panic!("{error:?}");
-                        }
-                        _ => {
-                            debug.render_finished();
+                    Err(error) => {
+                        match error {
+                            // This is an unrecoverable error.
+                            compositor::SurfaceError::OutOfMemory => {
+                                panic!("{error:?}");
+                            }
+                            _ => {
+                                debug.render_finished();
 
-                            // Try rendering again next frame.
-                            window.request_redraw();
+                                // Try rendering again next frame.
+                                window.request_redraw();
+                            }
                         }
-                    },
+                    }
                 }
             }
             event::Event::WindowEvent {
@@ -575,6 +578,21 @@ async fn run_instance<A, E, C>(
 
     // Manually drop the user interface
     drop(ManuallyDrop::into_inner(user_interface));
+}
+
+fn do_apply_ime(request: &ImeRequest, window: &winit::window::Window) {
+    match request {
+        ImeRequest::SetAllowed { allowed, .. } => {
+            window.set_ime_allowed(*allowed);
+        }
+        ImeRequest::SetPosition {
+            position: (x, y), ..
+        } => {
+            window.set_ime_allowed(true);
+            window
+                .set_ime_position(winit::dpi::LogicalPosition { x: *x, y: *y });
+        }
+    }
 }
 
 /// Returns true if the provided event should cause an [`Application`] to

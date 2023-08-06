@@ -1,4 +1,4 @@
-use crate::window;
+use crate::{ime::ImeRequest, window};
 
 /// A connection to the state of a shell.
 ///
@@ -10,6 +10,7 @@ use crate::window;
 pub struct Shell<'a, Message> {
     messages: &'a mut Vec<Message>,
     redraw_request: Option<window::RedrawRequest>,
+    ime_request: Option<ImeRequest>,
     is_layout_invalid: bool,
     are_widgets_invalid: bool,
 }
@@ -20,6 +21,7 @@ impl<'a, Message> Shell<'a, Message> {
         Self {
             messages,
             redraw_request: None,
+            ime_request: None,
             is_layout_invalid: false,
             are_widgets_invalid: false,
         }
@@ -51,6 +53,23 @@ impl<'a, Message> Shell<'a, Message> {
     /// Returns the requested [`Instant`] a redraw should happen, if any.
     pub fn redraw_request(&self) -> Option<window::RedrawRequest> {
         self.redraw_request
+    }
+
+    /// Request an ime command
+    pub fn request_ime(&mut self, request: ImeRequest) {
+        match &mut self.ime_request {
+            None => {
+                self.ime_request = Some(request);
+            }
+            Some(current) => {
+                current.merge(request);
+            }
+        }
+    }
+
+    /// Returns the requested [`ImeRequest`], if any
+    pub fn ime_request(&self) -> Option<ImeRequest> {
+        self.ime_request
     }
 
     /// Returns whether the current layout is invalid or not.
@@ -97,6 +116,10 @@ impl<'a, Message> Shell<'a, Message> {
 
         if let Some(at) = other.redraw_request {
             self.request_redraw(at);
+        }
+
+        if let Some(request) = other.ime_request {
+            self.request_ime(request);
         }
 
         self.is_layout_invalid =

@@ -292,6 +292,10 @@ where
             shell.request_redraw(redraw_request);
         }
 
+        if let Some(request) = local_shell.ime_request() {
+            shell.request_ime(request);
+        }
+
         if !local_messages.is_empty() {
             let mut heads = self.state.take().unwrap().into_heads();
 

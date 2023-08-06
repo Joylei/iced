@@ -2,6 +2,7 @@
 use crate::mouse;
 use crate::{Error, Executor, Runtime};
 
+use iced_native::ime::ImeRequest;
 pub use iced_winit::application::StyleSheet;
 pub use iced_winit::Application;
 
@@ -372,7 +373,7 @@ async fn run_instance<A, E, C>(
 
                     mouse_interaction = new_mouse_interaction;
                 }
-
+                user_interface.apply_ime(context.window(), do_apply_ime);
                 context.window().request_redraw();
                 runtime
                     .broadcast((redraw_event, crate::event::Status::Ignored));
@@ -495,4 +496,21 @@ async fn run_instance<A, E, C>(
 
     // Manually drop the user interface
     drop(ManuallyDrop::into_inner(user_interface));
+}
+
+fn do_apply_ime(request: &ImeRequest, window: &glutin::window::Window) {
+    match request {
+        ImeRequest::SetAllowed { allowed, .. } => {
+            window.set_ime_allowed(*allowed);
+        }
+        ImeRequest::SetPosition {
+            position: (x, y), ..
+        } => {
+            window.set_ime_allowed(true);
+            window.set_ime_position(glutin::dpi::LogicalPosition {
+                x: *x,
+                y: *y,
+            });
+        }
+    }
 }

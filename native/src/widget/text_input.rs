@@ -13,6 +13,7 @@ use editor::Editor;
 
 use crate::alignment;
 use crate::event::{self, Event};
+use crate::ime::ImeRequest;
 use crate::keyboard;
 use crate::layout;
 use crate::mouse::{self, click};
@@ -530,6 +531,8 @@ where
             let is_clicked =
                 layout.bounds().contains(cursor_position) && on_input.is_some();
 
+            let focus_gained = !state.ime_enabled && is_clicked;
+            let focus_lost = state.is_focused() && !is_clicked;
             state.is_focused = if is_clicked {
                 state.is_focused.or_else(|| {
                     let now = Instant::now();
@@ -545,7 +548,8 @@ where
 
             if is_clicked {
                 let text_layout = layout.children().next().unwrap();
-                let target = cursor_position.x - text_layout.bounds().x;
+                let text_bounds = text_layout.bounds();
+                let target = cursor_position.x - text_bounds.x;
 
                 let click =
                     mouse::Click::new(cursor_position, state.last_click);
@@ -561,7 +565,7 @@ where
 
                             find_cursor_position(
                                 renderer,
-                                text_layout.bounds(),
+                                text_bounds,
                                 font.clone(),
                                 size,
                                 &value,
@@ -589,7 +593,7 @@ where
                         } else {
                             let position = find_cursor_position(
                                 renderer,
-                                text_layout.bounds(),
+                                text_bounds,
                                 font.clone(),
                                 size,
                                 value,
@@ -613,8 +617,34 @@ where
                 }
 
                 state.last_click = Some(click);
-
+                if focus_gained {
+                    let position = state.cursor.start(value);
+                    let size = size.unwrap_or_else(|| renderer.default_size());
+                    let position = measure_cursor_and_scroll_offset(
+                        renderer,
+                        text_bounds,
+                        value,
+                        size,
+                        position,
+                        font.clone(),
+                    );
+                    let position = (
+                        (text_bounds.x + position.0) as i32,
+                        (text_bounds.y) as i32 + size as i32,
+                    );
+                    shell.request_ime(ImeRequest::SetPosition {
+                        at: Instant::now(),
+                        position,
+                    });
+                }
                 return event::Status::Captured;
+            }
+            if focus_lost {
+                state.ime_enabled = false;
+                shell.request_ime(ImeRequest::SetAllowed {
+                    at: Instant::now(),
+                    allowed: false,
+                });
             }
         }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
@@ -851,6 +881,12 @@ where
 
                         state.keyboard_modifiers =
                             keyboard::Modifiers::default();
+
+                        state.ime_enabled = false;
+                        shell.request_ime(ImeRequest::SetAllowed {
+                            at: Instant::now(),
+                            allowed: false,
+                        });
                     }
                     keyboard::KeyCode::Tab
                     | keyboard::KeyCode::Up
@@ -902,6 +938,111 @@ where
                 shell.request_redraw(window::RedrawRequest::At(
                     now + Duration::from_millis(millis_until_redraw as u64),
                 ));
+                if !state.ime_enabled {
+                    shell.request_ime(ImeRequest::SetAllowed {
+                        at: Instant::now(),
+                        allowed: true,
+                    });
+                }
+            } else if state.ime_enabled {
+                // in case lost focus
+                state.ime_enabled = false;
+                shell.request_ime(ImeRequest::SetAllowed {
+                    at: Instant::now(),
+                    allowed: false,
+                });
+            }
+        }
+        Event::Keyboard(keyboard::Event::ImeEnabled) => {
+            let state = state();
+            state.ime_enabled = true;
+            return event::Status::Captured;
+        }
+        Event::Keyboard(keyboard::Event::ImePreedit(_, _)) => {
+            let state = state();
+            if !state.is_focused() {
+                return event::Status::Ignored;
+            }
+
+            let text_bounds = layout.children().next().unwrap().bounds();
+            let size = size.unwrap_or_else(|| renderer.default_size());
+            let chars_from_left = state.cursor.start(value);
+            let position = measure_cursor_and_scroll_offset(
+                renderer,
+                text_bounds,
+                value,
+                size,
+                chars_from_left,
+                font.clone(),
+            );
+            let (x, y) = (
+                (text_bounds.x + position.0) as i32,
+                (text_bounds.y) as i32 + size as i32,
+            );
+
+            // let before_preedit_text = value
+            //     .to_string()
+            //     .chars()
+            //     .take(chars_from_left)
+            //     .fold(String::new(), |mut buffer, ch| {
+            //         buffer.push(ch);
+            //         buffer
+            //     });
+
+            // let position = renderer.measure_width(
+            //     &(before_preedit_text + &text),
+            //     size,
+            //     font.clone(),
+            // );
+
+            // let (x, y) = (
+            //     (text_bounds.x + position) as i32,
+            //     (text_bounds.y) as i32 + size as i32,
+            // );
+            shell.request_ime(ImeRequest::SetPosition {
+                at: Instant::now(),
+                position: (x, y),
+            });
+
+            return event::Status::Captured;
+        }
+        Event::Keyboard(keyboard::Event::ImeCommit(text)) => {
+            let state = state();
+            if let Some(on_input) = (state.is_pasting.is_none()
+                && !state.keyboard_modifiers.command()
+                && state.is_focused.is_some())
+            .then_some(on_input)
+            .flatten()
+            {
+                let mut editor = Editor::new(value, &mut state.cursor);
+
+                for ch in text.chars() {
+                    editor.insert(ch);
+                }
+
+                let message = (on_input)(editor.contents());
+                shell.publish(message);
+                //#[cfg(target_os = "macos")]
+                {
+                    let text_bounds =
+                        layout.children().next().unwrap().bounds();
+                    let size = size.unwrap_or_else(|| renderer.default_size());
+
+                    let width = renderer.measure_width(
+                        &editor.contents(),
+                        size,
+                        font.clone(),
+                    );
+                    let (x, y) = (
+                        (text_bounds.x + width) as i32,
+                        (text_bounds.y) as i32 + size as i32,
+                    );
+                    shell.request_ime(ImeRequest::SetPosition {
+                        at: Instant::now(),
+                        position: (x, y),
+                    });
+                }
+                return event::Status::Captured;
             }
         }
         _ => {}
@@ -1142,6 +1283,7 @@ pub struct State {
     last_click: Option<mouse::Click>,
     cursor: Cursor,
     keyboard_modifiers: keyboard::Modifiers,
+    ime_enabled: bool,
     // TODO: Add stateful horizontal scrolling offset
 }
 
@@ -1166,6 +1308,7 @@ impl State {
             last_click: None,
             cursor: Cursor::default(),
             keyboard_modifiers: keyboard::Modifiers::default(),
+            ime_enabled: false,
         }
     }
 

@@ -135,6 +135,18 @@ pub fn window_event(
 
             Some(Event::Window(window::Event::Moved { x, y }))
         }
+        WindowEvent::Ime(ime) => match ime {
+            winit::event::Ime::Enabled => {
+                Some(Event::Keyboard(keyboard::Event::ImeEnabled))
+            }
+            winit::event::Ime::Preedit(text, range) => Some(Event::Keyboard(
+                keyboard::Event::ImePreedit(text.clone(), *range),
+            )),
+            winit::event::Ime::Commit(text) => {
+                Some(Event::Keyboard(keyboard::Event::ImeCommit(text.clone())))
+            }
+            winit::event::Ime::Disabled => None,
+        },
         _ => None,
     }
 }

@@ -1,6 +1,7 @@
 //! Implement your own event loop to drive a user interface.
 use crate::application;
 use crate::event::{self, Event};
+use crate::ime::ImeRequest;
 use crate::layout;
 use crate::mouse;
 use crate::renderer;
@@ -30,6 +31,8 @@ pub struct UserInterface<'a, Message, Renderer> {
     state: widget::Tree,
     overlay: Option<layout::Node>,
     bounds: Size,
+    ime_last: Option<ImeRequest>,
+    ime_current: Option<ImeRequest>,
 }
 
 impl<'a, Message, Renderer> UserInterface<'a, Message, Renderer>
@@ -99,7 +102,11 @@ where
     ) -> Self {
         let root = root.into();
 
-        let Cache { mut state } = cache;
+        let Cache {
+            mut state,
+            ime_last,
+            ime_current,
+        } = cache;
         state.diff(root.as_widget());
 
         let base =
@@ -111,6 +118,8 @@ where
             state,
             overlay: None,
             bounds,
+            ime_last,
+            ime_current,
         }
     }
 
@@ -232,6 +241,16 @@ where
                     _ => {}
                 }
 
+                match (&mut self.ime_current, shell.ime_request()) {
+                    (None, Some(new)) => {
+                        self.ime_current = Some(new);
+                    }
+                    (Some(current), Some(new)) => {
+                        current.merge(new);
+                    }
+                    _ => {}
+                }
+
                 if shell.is_layout_invalid() {
                     let _ = ManuallyDrop::into_inner(manual_overlay);
 
@@ -314,6 +333,16 @@ where
                     }
                     (Some(current), Some(new)) if new < current => {
                         redraw_request = Some(new);
+                    }
+                    _ => {}
+                }
+
+                match (&mut self.ime_current, shell.ime_request()) {
+                    (None, Some(new)) => {
+                        self.ime_current = Some(new);
+                    }
+                    (Some(current), Some(new)) => {
+                        current.merge(new);
                     }
                     _ => {}
                 }
@@ -555,13 +584,41 @@ where
     /// Relayouts and returns a new  [`UserInterface`] using the provided
     /// bounds.
     pub fn relayout(self, bounds: Size, renderer: &mut Renderer) -> Self {
-        Self::build(self.root, bounds, Cache { state: self.state }, renderer)
+        Self::build(
+            self.root,
+            bounds,
+            Cache {
+                state: self.state,
+                ime_last: self.ime_last,
+                ime_current: self.ime_current,
+            },
+            renderer,
+        )
     }
 
     /// Extract the [`Cache`] of the [`UserInterface`], consuming it in the
     /// process.
     pub fn into_cache(self) -> Cache {
-        Cache { state: self.state }
+        Cache {
+            state: self.state,
+            ime_last: self.ime_last,
+            ime_current: self.ime_current,
+        }
+    }
+
+    /// Apply IME request if any
+    pub fn apply_ime<W>(&mut self, window: &W, f: impl Fn(&ImeRequest, &W)) {
+        if let Some(request) = &self.ime_current {
+            let changed = self
+                .ime_last
+                .as_ref()
+                .map(|current| !current.is_same(request))
+                .unwrap_or(true);
+            if changed {
+                f(request, window);
+            }
+            self.ime_last = self.ime_current.take();
+        }
     }
 }
 
@@ -569,6 +626,8 @@ where
 #[derive(Debug)]
 pub struct Cache {
     state: widget::Tree,
+    ime_last: Option<ImeRequest>,
+    ime_current: Option<ImeRequest>,
 }
 
 impl Cache {
@@ -579,6 +638,8 @@ impl Cache {
     pub fn new() -> Cache {
         Cache {
             state: widget::Tree::empty(),
+            ime_last: None,
+            ime_current: None,
         }
     }
 }
